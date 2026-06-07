@@ -14,18 +14,32 @@ from dotenv import load_dotenv
 load_dotenv()
 # pyrefly: ignore [missing-import]
 from langchain_core.rate_limiters import InMemoryRateLimiter
+import os
+
+os.environ["LANGSMITH_TRACING"] = os.getenv("LANGSMITH_TRACING", "false")
+os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY", "")
+os.environ["LANGSMITH_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "multi-agent-researcher")
+
 
 rate_limiter = InMemoryRateLimiter(
-    requests_per_second=0.5,   # 1 request every 2 seconds
+    requests_per_second=0.2,   # 1 request every 2 seconds
     check_every_n_seconds=0.1,
     max_bucket_size=3
 )
 
-llm = ChatGroq(
-    model = "llama-3.3-70b-versatile",
+primary_llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
     temperature=0,
     rate_limiter=rate_limiter
 )
+
+fallback_llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    rate_limiter=rate_limiter
+)
+
+llm = primary_llm.with_fallbacks([fallback_llm])
 search_tool = TavilySearch(max_results=3)
 # ── Node 1: Planner ──────────────────────────────────────────
 def planner_node(state: ResearchState) -> dict:
@@ -134,7 +148,9 @@ def critic_node(state: ResearchState) -> dict:
                 "You are a critical reviewer. Assess whether the research "
                 "sufficiently answers the original question. "
                 "Return verdict as 'sufficient' or 'insufficient'. "
-                "If insufficient, explain specifically what is missing."
+                "If insufficient, explain specifically what is missing. "
+                "Return confidence as a decimal NUMBER between 0.0 and 1.0, "
+                "for example 0.8 or 0.95. Never return confidence as a string."
             )
         },
         {

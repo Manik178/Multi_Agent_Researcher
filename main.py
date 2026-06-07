@@ -29,7 +29,7 @@ def run(question: str, thread_id: str = None):
 
 if __name__ == "__main__":
     # First question
-    tid = run("What is the current state of fusion energy research?")
+    tid = run("How is CRISPR gene editing being used to treat genetic diseases in 2025?")
 
     # Follow-up on same thread — graph remembers previous state
     print("\n" + "="*50)

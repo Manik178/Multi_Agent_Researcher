@@ -40,6 +40,29 @@ async def research(request: ResearchRequest):
         {"question": request.question},
         config
     )
+
+    verified = result.get("verified_claims", [])
+    total_claims = len(verified)
+    verified_count = sum(1 for c in verified if c.get("verified"))
+    cache_hits = result.get("cache_hits", 0)
+    qdrant_hits = result.get("qdrant_hits", 0)
+    total_sources = result.get("total_sources", 0)
+    total_retrievals = cache_hits + qdrant_hits + total_sources
+
+    dashboard = {
+        "critic_confidence": result.get("critic_confidence", 0.0),
+        "citation_score": round(verified_count / total_claims, 2) if total_claims > 0 else 0,
+        "verified_claims": verified_count,
+        "total_claims": total_claims,
+        "cache_hits": cache_hits,
+        "qdrant_hits": qdrant_hits,
+        "web_searches": total_sources,
+        "iterations_needed": result.get("iteration", 1),
+        "retrieval_efficiency": round(
+            (cache_hits + qdrant_hits) / total_retrievals, 2
+        ) if total_retrievals > 0 else 0
+    }
+
     return {
         "thread_id": thread_id,
         "question": request.question,
@@ -47,13 +70,10 @@ async def research(request: ResearchRequest):
         "iterations": result["iteration"],
         "critic_verdict": result["critic_verdict"],
         "final_answer": result["final_answer"],
-        "verified_claims": result.get("verified_claims", []),
+        "verified_claims": verified,
         "follow_up_questions": result.get("follow_up_questions", []),
-        "cache_hits": result.get("cache_hits", 0),
-        "qdrant_hits": result.get("qdrant_hits", 0),
-        "total_sources": result.get("total_sources", 0)
+        "dashboard": dashboard
     }
-
 
 # ── SSE streaming endpoint ────────────────────────────────────
 @router.get("/research/stream")
@@ -64,11 +84,32 @@ async def research_stream(question: str, thread_id: str = None):
     config = {"configurable": {"thread_id": thread_id}}
 
     async def event_generator():
-        async for event in research_graph.astream(
-            {"question": question},
-            config=config,
-            stream_mode="updates"
-        ):
+        import asyncio
+        import threading
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def producer():
+            try:
+                for event in research_graph.stream(
+                    {"question": question},
+                    config=config,
+                    stream_mode="updates"
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, event)
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, e)
+
+        threading.Thread(target=producer, daemon=True).start()
+
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            if isinstance(event, Exception):
+                break
+
             node_name = list(event.keys())[0]
             node_output = event[node_name]
 
@@ -156,3 +197,57 @@ async def remove_document(filename: str):
     """Delete a document from the private collection."""
     await asyncio.to_thread(delete_document, filename)
     return {"filename": filename, "status": "deleted"}
+
+# ── Confidence dashboard endpoint ─────────────────────────────
+@router.get("/sessions/{thread_id}")
+async def get_session(thread_id: str):
+    """Fetch a past research session by thread_id."""
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        state = await asyncio.to_thread(
+            research_graph.get_state,
+            config
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Session not found: {str(e)}")
+
+    if not state or not state.values:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    values = state.values
+
+    # ── Build confidence dashboard ────────────────────────────
+    verified = values.get("verified_claims", [])
+    total_claims = len(verified)
+    verified_count = sum(1 for c in verified if c.get("verified"))
+    citation_score = (verified_count / total_claims) if total_claims > 0 else 0
+
+    cache_hits = values.get("cache_hits", 0)
+    qdrant_hits = values.get("qdrant_hits", 0)
+    total_sources = values.get("total_sources", 0)
+    total_retrievals = cache_hits + qdrant_hits + total_sources
+
+    dashboard = {
+        "critic_confidence": values.get("critic_confidence", 0.0),
+        "citation_score": round(citation_score, 2),
+        "verified_claims": verified_count,
+        "total_claims": total_claims,
+        "cache_hits": cache_hits,
+        "qdrant_hits": qdrant_hits,
+        "web_searches": total_sources,
+        "total_retrievals": total_retrievals,
+        "iterations_needed": values.get("iteration", 1),
+        "retrieval_efficiency": round(
+            (cache_hits + qdrant_hits) / total_retrievals, 2
+        ) if total_retrievals > 0 else 0
+    }
+
+    return {
+        "thread_id": thread_id,
+        "question": values.get("question", ""),
+        "final_answer": values.get("final_answer", ""),
+        "follow_up_questions": values.get("follow_up_questions", []),
+        "verified_claims": verified,
+        "dashboard": dashboard
+    }

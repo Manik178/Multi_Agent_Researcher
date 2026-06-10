@@ -85,7 +85,7 @@ def researcher_node(state: ResearchState) -> dict:
         print(f"[CACHE HIT] {question[:60]}...")
         return {
             "research_results": [cached],
-            "cache_hits": state.get("cache_hits", 0) + 1
+            "cache_hits": 1
         }
 
     # ── Tier 2: Private documents ─────────────────────────────
@@ -119,7 +119,7 @@ def researcher_node(state: ResearchState) -> dict:
         set_cached(question, result)
         return {
             "research_results": [result],
-            "qdrant_hits": state.get("qdrant_hits", 0) + 1
+            "qdrant_hits": 1
         }
 
     # ── Tier 3: Qdrant web cache ──────────────────────────────
@@ -128,7 +128,7 @@ def researcher_node(state: ResearchState) -> dict:
         set_cached(question, similar)
         return {
             "research_results": [similar],
-            "qdrant_hits": state.get("qdrant_hits", 0) + 1
+            "qdrant_hits": 1
         }
 
     # ── Tier 4: Tavily web search ─────────────────────────────
@@ -162,7 +162,7 @@ def researcher_node(state: ResearchState) -> dict:
 
     return {
         "research_results": [result],
-        "total_sources": state.get("total_sources", 0) + 1
+        "total_sources": 1
     }
 
 # ── Node 3: Critic ───────────────────────────────────────────
@@ -206,6 +206,7 @@ def critic_node(state: ResearchState) -> dict:
     return {
         "critic_verdict": result.verdict,
         "critic_feedback": result.feedback,
+        "critic_confidence": result.confidence,   # add this line
         "iteration": state["iteration"] + 1
     }
 

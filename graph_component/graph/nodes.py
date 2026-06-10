@@ -7,7 +7,9 @@ from vector_store import search_similar, store_result
 from langchain_groq import ChatGroq
 # pyrefly: ignore [missing-import]
 from langchain_tavily import TavilySearch
-from .state import ResearchState, PlannerOutput, CriticOutput
+from .state import ResearchState, PlannerOutput, CriticOutput, CitationVerifierOutput, FollowUpOutput
+# pyrefly: ignore [missing-import]
+from vector_store import search_similar, store_result, search_private_docs
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
@@ -77,20 +79,59 @@ def planner_node(state: ResearchState) -> dict:
 def researcher_node(state: ResearchState) -> dict:
     question = state["sub_questions"][0]
 
-    # ── Tier 1: Redis exact match ─────────────────────────────
+    # ── Tier 1: Redis exact cache ─────────────────────────────
     cached = get_cached(question)
     if cached:
         print(f"[CACHE HIT] {question[:60]}...")
-        return {"research_results": [cached]}
+        return {
+            "research_results": [cached],
+            "cache_hits": state.get("cache_hits", 0) + 1
+        }
 
-    # ── Tier 2: Qdrant semantic similarity ────────────────────
+    # ── Tier 2: Private documents ─────────────────────────────
+    doc_chunks = search_private_docs(question)
+    if doc_chunks:
+        # Synthesize chunks into a summary
+        combined = "\n\n".join([
+            f"[From {c['source']} p.{c['page']}]: {c['text']}"
+            for c in doc_chunks
+        ])
+        summary = llm.invoke([
+            {
+                "role": "system",
+                "content": (
+                    "You are a research analyst. Summarize the provided document excerpts "
+                    "into a concise, factual paragraph relevant to the question. "
+                    "Always mention the source document name."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Question: {question}\n\nDocument excerpts:\n{combined}"
+            }
+        ])
+        result = {
+            "question": question,
+            "summary": summary.content,
+            "source": "private_documents",
+            "chunks": [c["source"] for c in doc_chunks]
+        }
+        set_cached(question, result)
+        return {
+            "research_results": [result],
+            "qdrant_hits": state.get("qdrant_hits", 0) + 1
+        }
+
+    # ── Tier 3: Qdrant web cache ──────────────────────────────
     similar = search_similar(question)
     if similar:
-        # Store in Redis too so next exact hit is faster
         set_cached(question, similar)
-        return {"research_results": [similar]}
+        return {
+            "research_results": [similar],
+            "qdrant_hits": state.get("qdrant_hits", 0) + 1
+        }
 
-    # ── Tier 3: Tavily + LLM (full research) ─────────────────
+    # ── Tier 4: Tavily web search ─────────────────────────────
     print(f"[FULL RESEARCH] {question[:60]}...")
     search_results = search_tool.invoke(question)
 
@@ -105,24 +146,24 @@ def researcher_node(state: ResearchState) -> dict:
         },
         {
             "role": "user",
-            "content": (
-                f"Question: {question}\n\n"
-                f"Search Results: {search_results}"
-            )
+            "content": f"Question: {question}\n\nSearch Results: {search_results}"
         }
     ])
 
     result = {
         "question": question,
-        "summary": summary.content
+        "summary": summary.content,
+        "source": "web",
+        "chunks": []
     }
 
-    # ── Store in both layers ──────────────────────────────────
     set_cached(question, result)
     store_result(question, result)
 
-    return {"research_results": [result]}
-
+    return {
+        "research_results": [result],
+        "total_sources": state.get("total_sources", 0) + 1
+    }
 
 # ── Node 3: Critic ───────────────────────────────────────────
 def critic_node(state: ResearchState) -> dict:
@@ -195,3 +236,64 @@ def writer_node(state: ResearchState) -> dict:
     ])
     
     return {"final_answer": result.content}
+
+def citation_verifier_node(state: ResearchState) -> dict:
+    structured_llm = llm.with_structured_output(CitationVerifierOutput)
+
+    research_text = "\n\n".join([
+        f"[Source {i+1}]: {r['summary']}"
+        for i, r in enumerate(state["research_results"])
+    ])
+
+    result = structured_llm.invoke([
+        {
+            "role": "system",
+            "content": (
+                "You are a fact-checker. Given a final answer and the research sources it was based on, "
+                "extract the 3-5 most important factual claims from the answer. "
+                "For each claim, check if it is supported by the provided sources. "
+                "Return a list of verified_claims where each item has: "
+                "'claim' (the statement), 'verified' (true/false), "
+                "'source_index' (1-based index of supporting source, or 0 if none). "
+                "Be strict — only mark as verified if the source explicitly supports it."
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Final Answer:\n{state['final_answer']}\n\n"
+                f"Research Sources:\n{research_text}"
+            )
+        }
+    ])
+
+    verified_count = sum(1 for c in result.verified_claims if c.get("verified"))
+    total_count = len(result.verified_claims)
+    print(f"[CITATIONS] {verified_count}/{total_count} claims verified")
+
+    return {"verified_claims": result.verified_claims}
+
+def followup_suggester_node(state: ResearchState) -> dict:
+    structured_llm = llm.with_structured_output(FollowUpOutput)
+
+    result = structured_llm.invoke([
+        {
+            "role": "system",
+            "content": (
+                "You are a research assistant. Based on the question and final answer provided, "
+                "generate exactly 3 follow-up questions that would deepen the user's understanding. "
+                "Questions should explore gaps, related topics, or practical implications. "
+                "Keep each question concise and specific."
+            )
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Original question: {state['question']}\n\n"
+                f"Final answer summary: {state['final_answer'][:500]}..."
+            )
+        }
+    ])
+
+    print(f"[FOLLOWUP] Generated {len(result.follow_up_questions)} suggestions")
+    return {"follow_up_questions": result.follow_up_questions}

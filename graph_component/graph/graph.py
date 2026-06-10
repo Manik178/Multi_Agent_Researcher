@@ -3,7 +3,10 @@ from langgraph.types import Send
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 from .state import ResearchState
-from .nodes import planner_node, researcher_node, critic_node, writer_node
+from .nodes import (
+    planner_node, researcher_node, critic_node,
+    writer_node, citation_verifier_node, followup_suggester_node
+)
 import os
 
 DB_URI = os.getenv(
@@ -43,7 +46,13 @@ def build_graph():
         should_continue,
         {"writer": "writer", "planner": "planner"}
     )
-    graph.add_edge("writer", END)
+    graph.add_node("citation_verifier", citation_verifier_node)
+
+    # Change writer edge from END to citation_verifier
+    graph.add_edge("writer", "citation_verifier")
+    graph.add_node("followup_suggester", followup_suggester_node)
+    graph.add_edge("citation_verifier", "followup_suggester")
+    graph.add_edge("followup_suggester", END)
 
     # ── PostgreSQL checkpointer ───────────────────────────────
     # Setup needs autocommit=True for CREATE INDEX CONCURRENTLY

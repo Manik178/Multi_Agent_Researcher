@@ -9,45 +9,27 @@ def replace_or_add(existing: list, new: list) -> list:
         return []
     return existing + new
 
+def sum_values(existing: int, new: int) -> int:
+    return (existing or 0) + (new or 0)
+
 
 class ResearchState(TypedDict):
-    # Input
     question: str
-
-    # H — Intent classification
-    intent: str           # "factual" | "comparative" | "advisory" | "exploratory"
-    search_depth: int     # 3 for factual, 5 for comparative/exploratory
-
-    # Planner output
     sub_questions: list[str]
-
-    # E — Document context (from uploaded docs)
-    document_context: str  # concatenated relevant chunks from Qdrant private docs
-
-    # Researcher output
+    document_context: str
     research_results: Annotated[list[dict], replace_or_add]
-
-    # Critic output
     critic_verdict: str
     critic_feedback: str
-    critic_confidence: float   # C — confidence score
-
-    # G — Citation verification
-    verified_claims: list[dict]    # {"claim": str, "verified": bool, "source": str}
-
-    # B — Follow-up suggestions
+    critic_confidence: float
+    verified_claims: list[dict]
     follow_up_questions: list[str]
-
-    # Writer output
     final_answer: str
 
-    # C — Confidence metadata
-    cache_hits: int
-    qdrant_hits: int
-    total_sources: int
-    iterations_needed: int
+    # These three get written by parallel nodes — need sum reducer
+    cache_hits: Annotated[int, sum_values]
+    qdrant_hits: Annotated[int, sum_values]
+    total_sources: Annotated[int, sum_values]
 
-    # Control
     iteration: int
     approved: bool
 
@@ -83,3 +65,27 @@ class CitationOutput(BaseModel):
 
 class FollowUpOutput(BaseModel):
     follow_up_questions: list[str]
+
+class CitationVerifierOutput(BaseModel):
+    verified_claims: list[dict]
+
+    @field_validator("verified_claims", mode="before")
+    @classmethod
+    def validate_claims(cls, v):
+        # Ensure each claim has required fields
+        for item in v:
+            if "claim" not in item:
+                item["claim"] = ""
+            if "verified" not in item:
+                item["verified"] = False
+            if "source_index" not in item:
+                item["source_index"] = 0
+        return v
+
+class FollowUpOutput(BaseModel):
+    follow_up_questions: list[str]
+
+    @field_validator("follow_up_questions")
+    @classmethod
+    def validate_count(cls, v):
+        return v[:3]  # cap at 3

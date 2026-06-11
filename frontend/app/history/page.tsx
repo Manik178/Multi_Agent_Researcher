@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getSessionHistory, getSession } from "@/lib/api";
 import { SessionCard } from "@/components/SessionCard";
+import { Button } from "@/components/ui/button";
 import type { SessionResponse, StoredSession } from "@/types";
 import { Clock, Search } from "lucide-react";
 

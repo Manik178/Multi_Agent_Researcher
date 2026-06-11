@@ -29,23 +29,25 @@ rate_limiter = InMemoryRateLimiter(
     max_bucket_size=3
 )
 
-primary_llm = ChatGroq(
+# The smart 70B model for strict JSON schemas (Planner, Critic, etc.)
+structured_llm_base = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0,
     rate_limiter=rate_limiter
 )
 
-fallback_llm = ChatGroq(
+# The faster 8B model for heavy text reading/writing (Researcher, Writer)
+text_llm_base = ChatGroq(
     model="llama-3.1-8b-instant",
     temperature=0,
     rate_limiter=rate_limiter
 )
 
-llm = primary_llm.with_fallbacks([fallback_llm])
 search_tool = TavilySearch(max_results=3)
+
 # ── Node 1: Planner ──────────────────────────────────────────
 def planner_node(state: ResearchState) -> dict:
-    structured_llm = llm.with_structured_output(PlannerOutput)
+    structured_llm = structured_llm_base.with_structured_output(PlannerOutput)
 
     # Build system message
     system_msg = (
@@ -96,7 +98,7 @@ def researcher_node(state: ResearchState) -> dict:
             f"[From {c['source']} p.{c['page']}]: {c['text']}"
             for c in doc_chunks
         ])
-        summary = llm.invoke([
+        summary = text_llm_base.invoke([
             {
                 "role": "system",
                 "content": (
@@ -135,7 +137,7 @@ def researcher_node(state: ResearchState) -> dict:
     print(f"[FULL RESEARCH] {question[:60]}...")
     search_results = search_tool.invoke(question)
 
-    summary = llm.invoke([
+    summary = text_llm_base.invoke([
         {
             "role": "system",
             "content": (
@@ -175,7 +177,7 @@ def critic_node(state: ResearchState) -> dict:
     #         "iteration": state["iteration"] + 1
     #     }
     
-    structured_llm = llm.with_structured_output(CriticOutput)
+    structured_llm = structured_llm_base.with_structured_output(CriticOutput)
     
     research_text = "\n\n".join([
         f"Q: {r['question']}\nA: {r['summary']}"
@@ -218,7 +220,7 @@ def writer_node(state: ResearchState) -> dict:
         for r in state["research_results"]
     ])
     
-    result = llm.invoke([
+    result = text_llm_base.invoke([
         {
             "role": "system",
             "content": (
@@ -239,7 +241,7 @@ def writer_node(state: ResearchState) -> dict:
     return {"final_answer": result.content}
 
 def citation_verifier_node(state: ResearchState) -> dict:
-    structured_llm = llm.with_structured_output(CitationVerifierOutput)
+    structured_llm = structured_llm_base.with_structured_output(CitationVerifierOutput)
 
     research_text = "\n\n".join([
         f"[Source {i+1}]: {r['summary']}"
@@ -275,7 +277,7 @@ def citation_verifier_node(state: ResearchState) -> dict:
     return {"verified_claims": result.verified_claims}
 
 def followup_suggester_node(state: ResearchState) -> dict:
-    structured_llm = llm.with_structured_output(FollowUpOutput)
+    structured_llm = structured_llm_base.with_structured_output(FollowUpOutput)
 
     result = structured_llm.invoke([
         {

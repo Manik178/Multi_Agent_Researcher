@@ -22,7 +22,6 @@ os.environ["LANGSMITH_TRACING"] = os.getenv("LANGSMITH_TRACING", "false")
 os.environ["LANGSMITH_API_KEY"] = os.getenv("LANGSMITH_API_KEY", "")
 os.environ["LANGSMITH_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "multi-agent-researcher")
 
-
 rate_limiter = InMemoryRateLimiter(
     requests_per_second=0.2,   # 1 request every 2 seconds
     check_every_n_seconds=0.1,

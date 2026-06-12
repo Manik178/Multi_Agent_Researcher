@@ -137,8 +137,8 @@ def run_research_graph(inputs: dict) -> dict:
     print(f"  → Completed in {elapsed:.1f}s")
 
     # Cooldown after graph run (the graph itself made many LLM calls)
-    print(f"  → Cooling down 15s to reset TPM window...")
-    time.sleep(15)
+    print(f"  → Cooling down 30s to reset TPM window for 8B and 70B models...")
+    time.sleep(30)
 
     return result
 
